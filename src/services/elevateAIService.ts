@@ -185,6 +185,11 @@ export const elevateAIService = {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
+            // Skip empty lines and SSE comments (heartbeats starting with ':')
+            if (!line.trim() || line.startsWith(':')) {
+              continue;
+            }
+
             console.log('SSE line:', JSON.stringify(line));
 
             // Skip "message:" lines - they're just prefixes in Flowise format
