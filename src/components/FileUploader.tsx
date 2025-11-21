@@ -32,6 +32,8 @@ export interface FlowiseUpload {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_FILES = 5;
+const MAX_IMAGE_DIMENSION = 2000; // Maximum width or height for images
+const IMAGE_QUALITY = 0.8; // JPEG quality (0-1)
 const ALLOWED_MIME_TYPES = [
   // Images
   'image/jpeg',
@@ -98,6 +100,76 @@ const FileUploader: React.FC<FileUploaderProps> = ({
     });
   };
 
+  // Compress image if needed
+  const compressImage = (file: File): Promise<File> => {
+    return new Promise((resolve, reject) => {
+      if (!file.type.startsWith('image/')) {
+        resolve(file);
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          // Calculate new dimensions if image is too large
+          if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
+            if (width > height) {
+              height = (height / width) * MAX_IMAGE_DIMENSION;
+              width = MAX_IMAGE_DIMENSION;
+            } else {
+              width = (width / height) * MAX_IMAGE_DIMENSION;
+              height = MAX_IMAGE_DIMENSION;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('Failed to get canvas context'));
+            return;
+          }
+
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error('Failed to compress image'));
+                return;
+              }
+
+              // Create a new File object from the blob
+              const compressedFile = new File([blob], file.name, {
+                type: 'image/jpeg',
+                lastModified: Date.now(),
+              });
+
+              console.log(`Image compressed: ${(file.size / 1024).toFixed(2)}KB -> ${(compressedFile.size / 1024).toFixed(2)}KB`);
+              resolve(compressedFile);
+            },
+            'image/jpeg',
+            IMAGE_QUALITY
+          );
+        };
+        img.onerror = () => {
+          reject(new Error('Failed to load image'));
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = () => {
+        reject(new Error('Failed to read file'));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Convert file to base64 data URI for Flowise
   const convertToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -123,22 +195,33 @@ const FileUploader: React.FC<FileUploaderProps> = ({
     }
     
     const newFiles: FileInfo[] = [];
-    
+
     for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
-      
+      let file = fileList[i];
+
       // Check file size
       if (file.size > MAX_FILE_SIZE) {
         toast.error(`File ${file.name} exceeds the maximum size of 10MB.`);
         continue;
       }
-      
+
       // Check file type
       if (!ALLOWED_MIME_TYPES.includes(file.type)) {
         toast.error(`File type ${file.type} is not supported.`);
         continue;
       }
-      
+
+      // Compress image if it's an image file
+      if (file.type.startsWith('image/')) {
+        try {
+          file = await compressImage(file);
+        } catch (error) {
+          console.error(`Error compressing image ${file.name}:`, error);
+          toast.error(`Failed to process image ${file.name}`);
+          continue;
+        }
+      }
+
       // Generate preview for images
       const preview = await generatePreview(file);
 
