@@ -17,9 +17,9 @@ app.use((req, res, next) => {
   // CSP directives
   const cspDirectives = [
     "default-src 'self'",
-    "script-src 'self' https://cdn.gpteng.co 'unsafe-inline'",
+    "script-src 'self' https://cdn.gpteng.co https://www.googletagmanager.com 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
-    "connect-src 'self' https://yscpcikasejxqjyadszh.supabase.co",
+    "connect-src 'self' https://yscpcikasejxqjyadszh.supabase.co https://flowise.elevate-hub.app https://www.google-analytics.com",
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
     "media-src 'self'",
@@ -31,7 +31,7 @@ app.use((req, res, next) => {
   
   // Add development-specific permissions
   if (isDevelopment) {
-    cspDirectives.push("connect-src 'self' https://yscpcikasejxqjyadszh.supabase.co ws: wss:");
+    cspDirectives[3] = "connect-src 'self' https://yscpcikasejxqjyadszh.supabase.co https://flowise.elevate-hub.app https://www.google-analytics.com ws: wss:";
   }
   
   res.setHeader('Content-Security-Policy', cspDirectives.join('; '));

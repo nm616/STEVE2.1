@@ -1,9 +1,8 @@
 
-import React, { useState, useRef } from "react";
+import React, { useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { Paperclip, X, File, Image, FileText, FileSpreadsheet } from "lucide-react";
+import { Paperclip, X, File as FileIcon, Image as ImageIcon, FileText, FileSpreadsheet } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
-import { supabase } from "@/integrations/supabase/client";
 import { v4 as uuidv4 } from 'uuid';
 
 interface FileUploaderProps {
@@ -145,14 +144,23 @@ const FileUploader: React.FC<FileUploaderProps> = ({
                 return;
               }
 
-              // Create a new File object from the blob
-              const compressedFile = new File([blob], file.name, {
-                type: 'image/jpeg',
-                lastModified: Date.now(),
-              });
-
-              console.log(`Image compressed: ${(file.size / 1024).toFixed(2)}KB -> ${(compressedFile.size / 1024).toFixed(2)}KB`);
-              resolve(compressedFile);
+              // Create a new File object from the blob with better browser compatibility
+              try {
+                // Try using File constructor
+                const compressedFile = new File([blob], file.name, {
+                  type: 'image/jpeg',
+                  lastModified: Date.now(),
+                });
+                console.log(`Image compressed: ${(file.size / 1024).toFixed(2)}KB -> ${(compressedFile.size / 1024).toFixed(2)}KB`);
+                resolve(compressedFile);
+              } catch (e) {
+                // Fallback for browsers that don't support File constructor
+                const compressedFile = blob as any;
+                compressedFile.name = file.name;
+                compressedFile.lastModified = Date.now();
+                console.log(`Image compressed: ${(file.size / 1024).toFixed(2)}KB -> ${(blob.size / 1024).toFixed(2)}KB`);
+                resolve(compressedFile as File);
+              }
             },
             'image/jpeg',
             IMAGE_QUALITY
@@ -270,7 +278,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({
   // Function to get the appropriate icon based on file type
   const getFileIcon = (fileType: string) => {
     if (fileType.startsWith('image/')) {
-      return <Image className="h-5 w-5 mr-1 text-gray-600" />;
+      return <ImageIcon className="h-5 w-5 mr-1 text-gray-600" />;
     } else if (fileType === 'application/pdf' || 
                fileType === 'application/msword' || 
                fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
@@ -281,7 +289,7 @@ const FileUploader: React.FC<FileUploaderProps> = ({
                fileType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
       return <FileSpreadsheet className="h-5 w-5 mr-1 text-green-600" />;
     } else {
-      return <File className="h-5 w-5 mr-1 text-gray-600" />;
+      return <FileIcon className="h-5 w-5 mr-1 text-gray-600" />;
     }
   };
 
