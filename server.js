@@ -17,7 +17,7 @@ app.use((req, res, next) => {
   // CSP directives
   const cspDirectives = [
     "default-src 'self'",
-    "script-src 'self' https://cdn.gpteng.co https://www.googletagmanager.com 'unsafe-inline'",
+    "script-src 'self' https://cdn.gpteng.co https://www.googletagmanager.com https://static.cloudflareinsights.com 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "connect-src 'self' https://yscpcikasejxqjyadszh.supabase.co https://flowise.elevate-hub.app https://www.google-analytics.com",
     "img-src 'self' data: blob: https:",
