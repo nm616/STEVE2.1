@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is "Elevate Chat" (SteveV2.1) - a React-based AI chat application with authentication, multiple AI backends, and conversation management. Built with Vite, TypeScript, React, Tailwind CSS, and shadcn-ui components.
+This is "Elevate Chat" (SteveV2.1) - a React-based AI chat application with authentication, streaming responses, and conversation management. Built with Vite, TypeScript, React, Tailwind CSS, and shadcn-ui components.
 
 ## Development Commands
 
@@ -58,35 +58,51 @@ The app uses React Router with these routes:
 - Uses React Query for server state management
 - Persists current chat ID and Act mode preference to localStorage
 
-### Data Flow for Messages
+### Data Flow for Messages (Streaming)
 
 1. User sends message via [ChatInput](src/components/ChatInput.tsx)
 2. `useChatState.handleSendMessage()` is called
-3. Message saved to Supabase via [chatService](src/services/chatService.ts)
-4. AI request sent via [elevateAIService](src/services/elevateAIService.ts)
-5. Edge function invoked based on mode:
-   - Chat mode → [supabase/functions/claude-chat](supabase/functions/claude-chat/index.ts)
-   - Act mode → [supabase/functions/act-chat](supabase/functions/act-chat/index.ts)
-6. Edge function calls Flowise API with session management
-7. Response processed and saved back to Supabase
-8. If first message in chat, title auto-generated via [titleGenerationService](src/services/titleGenerationService.ts)
-9. UI updated via React Query cache invalidation
+3. User message added to UI immediately and saved to Supabase via [chatService](src/services/chatService.ts)
+4. Empty assistant message created in UI for streaming updates
+5. AI request sent via [elevateAIService.sendMessageStreaming()](src/services/elevateAIService.ts)
+6. Edge function invoked based on mode:
+   - Chat mode → [supabase/functions/claude-chat-streaming](supabase/functions/claude-chat-streaming/index.ts) (5min timeout)
+   - Act mode → [supabase/functions/act-chat](supabase/functions/act-chat/index.ts) (5min timeout)
+7. Edge function calls Flowise API with session management and streaming enabled
+8. Response streams back via Server-Sent Events (SSE):
+   - `onToken` callback updates assistant message in UI token-by-token
+   - `onThinking` callback updates thinking state for Claude Sonnet 4 extended thinking
+   - `onComplete` callback saves final message to Supabase
+9. If first message in chat, title auto-generated via [titleGenerationService](src/services/titleGenerationService.ts) using Gemini
+10. UI updated via React Query cache invalidation
 
 ### AI Integration Architecture
 
 **Two Operating Modes:**
-- **Chat Mode**: Standard conversational AI (90s timeout) via Flowise endpoint
-- **Act Mode**: Extended AI agent operations (5 min timeout) for complex tasks via separate Flowise endpoint
+- **Chat Mode**: Standard conversational AI with streaming (5min timeout) via [claude-chat-streaming](supabase/functions/claude-chat-streaming/index.ts)
+- **Act Mode**: Extended AI agent operations (5min timeout) for complex tasks via [act-chat](supabase/functions/act-chat/index.ts)
+
+**Streaming Implementation:**
+- Uses Server-Sent Events (SSE) for real-time token streaming
+- Parses multiple SSE formats:
+  - Flowise format: `{"event":"token","data":"<content>"}`
+  - Extended thinking: `{"event":"thinking","data":"<thinking>"}`
+  - Metadata: `{"event":"metadata","data":{"sessionId":"..."}}`
+- Handles both JSON and plain text SSE data
+- Accumulates thinking separately from response content
+- See [elevateAIService.ts:74-272](src/services/elevateAIService.ts#L74) for full SSE parsing logic
 
 **Session Management:**
-- Each chat has a `session_id` stored in Supabase `chats` table
-- Session ID passed to Flowise API for conversation continuity
+- Each chat has a `session_id` (UUID) generated on creation and stored in Supabase `chats` table
+- Session ID passed to Flowise API for conversation continuity across messages
 - When chat deleted, corresponding Flowise session deleted via [delete-flowise-chat](supabase/functions/delete-flowise-chat/index.ts) function
+- Session isolation ensures separate conversation contexts per chat
 
 **Response Handling:**
-- Supports Sonnet 4 extended thinking format
-- Filters out `thinking` parts, returns only `text` parts
-- Handles multiple response formats (text, answer, response fields)
+- Supports Claude Sonnet 4 extended thinking format
+- Thinking content displayed in real-time via `currentThinking` state
+- Thinking saved with message in `thinking` field for collapsible display
+- Handles multiple response formats (token, text, answer, response fields)
 
 ### Database Schema (Supabase)
 
@@ -98,22 +114,24 @@ The app uses React Router with these routes:
 
 **Services:**
 - [chatService.ts](src/services/chatService.ts) - All database operations for chats and messages
-- [elevateAIService.ts](src/services/elevateAIService.ts) - AI message handling and mode switching
+- [elevateAIService.ts](src/services/elevateAIService.ts) - SSE streaming, AI message handling, mode switching
 - [flowiseService.ts](src/services/flowiseService.ts) - Flowise session deletion
 - [titleGenerationService.ts](src/services/titleGenerationService.ts) - Auto-title generation using Gemini
 
 ### Edge Functions (Supabase Functions in Deno)
 
 Located in `supabase/functions/`:
-- `claude-chat` - Chat mode Flowise integration (90s timeout)
+- `claude-chat-streaming` - Main chat mode with SSE streaming (5min timeout)
 - `act-chat` - Act mode Flowise integration (5min timeout)
 - `delete-flowise-chat` - Flowise session cleanup
 - `gemini-chat` - Gemini API integration (used for title generation)
 - `generate-chat-title` - Wrapper for title generation
+- `claude-chat` - Legacy non-streaming endpoint (deprecated, use claude-chat-streaming)
 
 **Environment Variables Required:**
 - `GEMINI_API_KEY` - For Gemini chat and title generation
-- Flowise endpoints and auth tokens are hardcoded in edge functions
+- Flowise endpoints are hardcoded in edge functions (see line 56 in claude-chat-streaming)
+- Supabase URL and anon key are hardcoded in [elevateAIService.ts:111-112](src/services/elevateAIService.ts#L111)
 
 ### Component Hierarchy
 
@@ -126,30 +144,47 @@ Chat (main page)
 │   └── Logout button
 ├── MessageList
 │   ├── WelcomeScreen (when no messages)
-│   ├── ChatMessage (for each message)
-│   └── TypingIndicator (when loading)
+│   ├── ChatMessage (for each message, with collapsible thinking)
+│   └── TypingIndicator (when loading, shows current thinking)
 └── ChatInput
-    └── FileUploader (present but file handling not fully implemented)
+    └── FileUploader (converts files to base64 for Flowise)
 ```
 
 ### Key Implementation Details
 
-**Chat Initialization** ([useChatState.ts:187-237](src/hooks/useChatState.ts#L187)):
+**Chat Initialization** ([useChatState.ts:188-223](src/hooks/useChatState.ts#L188)):
 - On mount, checks localStorage for saved chat ID
 - If found and exists, selects it
 - Otherwise selects first available chat
 - Does NOT auto-create chat on mount (user must click "New Chat")
 
-**Message Format Conversions:**
-- Internal `Message` type defined in useChatState.ts
-- Converted to `ElevateAIMessage` for MessageList component
-- Converted to database format for Supabase storage
-- All use timestamp/createdAt fields consistently
+**Message Streaming Flow** ([useChatState.ts:252-378](src/hooks/useChatState.ts#L252)):
+- User message added to state immediately before API call
+- Empty assistant message created with temp ID
+- Streaming callbacks update assistant message in-place:
+  - `onToken`: Accumulates response content, updates message state
+  - `onThinking`: Accumulates thinking content, updates both `currentThinking` and message state
+  - `onComplete`: Saves final message to DB, generates title if first message
+  - `onError`: Removes assistant message from state
+- Both user and assistant messages saved to Supabase separately
 
-**Sidebar Resizing** ([Chat.tsx:46-80](src/pages/Chat.tsx#L46)):
+**File Upload Implementation:**
+- Files converted to base64 data URIs in [FileUploader](src/components/FileUploader.tsx)
+- Passed as `FlowiseUpload[]` format with `data`, `type`, `name`, `mime` fields
+- Image files use `type: "file"` (enables vision), documents use `type: "file:full"`
+- Base64 data sent directly to Flowise via edge function (no Supabase storage)
+- See [elevateAIService.ts:53-72](src/services/elevateAIService.ts#L53) for conversion logic
+
+**Sidebar Resizing** ([Chat.tsx:37-71](src/pages/Chat.tsx#L37)):
 - Custom mouse-drag implementation (not using library)
 - Width constrained between 200px-600px
 - State persisted during session (not localStorage)
+
+**Message Format:**
+- Internal `Message` type defined in [useChatState.ts:13-23](src/hooks/useChatState.ts#L13)
+- Includes `thinking` field for extended thinking content
+- `file_metadata` stores uploaded file information
+- `timestamp` and `createdAt` used interchangeably (converted between Date and ISO string)
 
 ### Styling
 
@@ -164,21 +199,30 @@ Chat (main page)
 - All service calls wrapped in try-catch
 - User-facing errors shown via sonner toast notifications
 - Console logging for debugging throughout
+- Streaming errors handled via `onError` callback
 
 ### React Query Usage
 - Used for chats list fetching and caching
 - Mutations for create/delete/rename operations
-- Manual cache invalidation after mutations
+- Manual cache invalidation after mutations (`queryClient.invalidateQueries`)
+- Does NOT use React Query for messages (managed in component state)
 
 ### TypeScript Interfaces
 - Database types auto-generated in [src/integrations/supabase/types.ts](src/integrations/supabase/types.ts)
 - Service-specific types in each service file
-- Common Message interface shared across services
+- Multiple `Message` interfaces exist (useChatState, elevateAIService, chatService) - ensure compatibility when passing between services
+
+### SSE Stream Parsing
+- Custom SSE parser in [elevateAIService.ts:160-266](src/services/elevateAIService.ts#L160)
+- Handles line buffering, event type tracking, JSON vs plain text data
+- Skips SSE comments (lines starting with `:`)
+- Accumulates `sessionId` from metadata events for return value
 
 ## Known Limitations
 
-- File upload UI exists but backend handling incomplete
-- Flowise API endpoints and tokens hardcoded in edge functions
+- Messages stored in Supabase `chat_messages` table (comment at line 97 of chatService.ts is outdated)
+- Flowise API endpoints and Supabase credentials hardcoded in edge functions and services
 - No pagination for chat messages or chat list
 - No real-time subscriptions (relies on manual refetch)
-- Chat expiration logic defined but cleanup function usage unclear
+- Chat expiration logic defined in DB schema but cleanup not implemented
+- File uploads work but no Supabase storage integration (files sent as base64 only)
