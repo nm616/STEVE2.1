@@ -227,11 +227,64 @@ export const elevateAIService = {
                   continue;
                 }
 
+                // Handle Agentflow events for Thinking UI
+                if (onThinking) {
+                   if (parsed.event === 'agentFlowEvent' && parsed.data) {
+                      const status = parsed.data;
+                      if (status === 'INPROGRESS') {
+                         onThinking('\n> Agent status: In Progress...\n');
+                      }
+                   }
+                   
+                   if (parsed.event === 'usedTools' && parsed.data && Array.isArray(parsed.data)) {
+                      parsed.data.forEach((tool: any) => {
+                         const toolName = tool.tool || 'Unknown tool';
+                         const toolInput = tool.toolInput ? JSON.stringify(tool.toolInput, null, 2) : '';
+                         onThinking(`\n> 🛠️ Used Tool: **${toolName}**\nInput: ${toolInput}\n`);
+                      });
+                   }
+                }
+
+                // Handle Artifacts (Images)
+                if (parsed.event === 'artifacts' && parsed.data && Array.isArray(parsed.data)) {
+                   parsed.data.forEach((artifact: any) => {
+                      if (artifact.type === 'png' || artifact.type === 'jpeg' || artifact.type === 'jpg') {
+                         const rawData = artifact.data || '';
+                         if (rawData.startsWith('FILE-STORAGE::')) {
+                            const fileName = rawData.replace('FILE-STORAGE::', '');
+                            // Use the captured sessionId from metadata, or fall back to the input sessionId
+                            const currentSessionId = capturedSessionId || sessionId;
+                            // Use Supabase Edge Function proxy with correct parameters for Flowise's get-upload-file endpoint
+                            const chatflowId = isActMode ? '21beb3b8-04b9-45ff-9a05-54a4f3aac59a' : '13f3b740-1417-4be4-b6e6-219735d9061d';
+                            const imageUrl = `https://yscpcikasejxqjyadszh.supabase.co/functions/v1/proxy-image?fileName=${encodeURIComponent(fileName)}&chatId=${encodeURIComponent(currentSessionId || '')}&chatflowId=${chatflowId}`;
+                            const markdownImage = `\n\n![Generated Image](${imageUrl})\n\n`;
+                            console.log('Artifact received, appending image markdown:', markdownImage);
+                            onToken(markdownImage);
+                         }
+                      }
+                   });
+                   continue;
+                }
+
                 // Handle metadata event for sessionId
                 if (parsed.event === 'metadata' && parsed.data?.sessionId) {
                   capturedSessionId = parsed.data.sessionId;
                   console.log('Captured sessionId from metadata:', capturedSessionId);
                   continue;
+                }
+
+                // Handle error event (new Flowise format)
+                if (parsed.event === 'error' && parsed.data) {
+                  console.error('Error event received from Flowise:', parsed.data);
+                  // Extract user-friendly error message
+                  let errorMessage = parsed.data;
+                  if (typeof errorMessage === 'string') {
+                    // Remove technical prefixes for better UX
+                    errorMessage = errorMessage.replace(/^Error: predictionsServices\.buildChatflow - /, '');
+                    errorMessage = errorMessage.replace(/^Error in Agent node: /, '');
+                  }
+                  onError(errorMessage);
+                  return; // Stop processing after error
                 }
 
                 // Handle end event
