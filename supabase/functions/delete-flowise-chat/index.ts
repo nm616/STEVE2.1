@@ -14,26 +14,29 @@ serve(async (req) => {
   }
 
   try {
-    const { sessionId } = await req.json();
-    
+    const { sessionId, chatflowId } = await req.json();
+
     if (!sessionId) {
       return new Response(
-        JSON.stringify({ error: 'Session ID is required' }), 
-        { 
-          status: 400, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        JSON.stringify({ error: 'Session ID is required' }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         }
       );
     }
 
-    // Use the new Heroku-hosted Flowise base URL and API key
-    const flowiseBaseUrl = 'http://54.147.188.114:3000/api/v1/';
+    // Default to Chat mode chatflow if not specified
+    const targetChatflowId = chatflowId || '13f3b740-1417-4be4-b6e6-219735d9061d';
+
+    // Use the correct Flowise base URL and API key
+    const flowiseBaseUrl = 'https://flowise.elevate-hub.app/api/v1';
     const flowiseApiKey = '7s1bHN5j80EbVnSIh6wxwlz74lY6iFbwBmx3tw1VTEM';
-    
-    console.log(`Attempting to delete Flowise chatflow: ${sessionId}`);
-    
-    // Delete the chatflow using the correct endpoint
-    const response = await fetch(`${flowiseBaseUrl}/chatflows/${sessionId}`, {
+
+    console.log(`Attempting to delete Flowise chat session: ${sessionId} from chatflow: ${targetChatflowId}`);
+
+    // Delete the chat messages using the correct chatmessage endpoint with sessionId query parameter
+    const response = await fetch(`${flowiseBaseUrl}/chatmessage/${targetChatflowId}?sessionId=${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
       headers: {
         'Authorization': `Bearer ${flowiseApiKey}`,
@@ -42,16 +45,16 @@ serve(async (req) => {
     });
 
     if (response.ok) {
-      console.log(`Successfully deleted Flowise chatflow: ${sessionId}`);
+      console.log(`Successfully deleted Flowise chat session: ${sessionId} from chatflow: ${targetChatflowId}`);
       return new Response(
-        JSON.stringify({ success: true, message: 'Chatflow deleted from Flowise' }), 
-        { 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        JSON.stringify({ success: true, message: 'Chat session deleted from Flowise' }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         }
       );
     } else {
       const errorText = await response.text();
-      console.error(`Failed to delete Flowise chatflow ${sessionId}:`, response.status, errorText);
+      console.error(`Failed to delete Flowise chat session ${sessionId} from chatflow ${targetChatflowId}:`, response.status, errorText);
       
       // Return success even if Flowise deletion fails to avoid blocking Supabase deletion
       return new Response(
